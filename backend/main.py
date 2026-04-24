@@ -121,26 +121,48 @@ async def add_url(background_tasks: BackgroundTasks, url: str):
     return DocumentInfo(id=doc_id, filename=url, status="processing", type="url")
 
 async def process_document(doc_id, file_path, filename):
-    parser = get_parser(filename)
-    if parser:
-        content = parser(file_path)
+    try:
+        parser = get_parser(filename)
+        if parser:
+            content = parser(file_path)
+            if content:
+                vector_store.add_documents(content, doc_id, filename)
+                # Update registry status
+                for doc in document_registry:
+                    if doc["id"] == doc_id:
+                        doc["status"] = "ready"
+                        save_registry(document_registry)
+                        return
+            else:
+                raise Exception("No text content could be extracted")
+        else:
+            raise Exception("Unsupported file format")
+    except Exception as e:
+        logger.error(f"Ingestion Error: {e}")
+        for doc in document_registry:
+            if doc["id"] == doc_id:
+                doc["status"] = "error"
+                save_registry(document_registry)
+                break
+
+async def process_url(doc_id, url):
+    try:
+        content = parse_web(url)
         if content:
-            vector_store.add_documents(content, doc_id, filename)
+            vector_store.add_documents(content, doc_id, url)
             # Update registry status
             for doc in document_registry:
                 if doc["id"] == doc_id:
                     doc["status"] = "ready"
                     save_registry(document_registry)
-                    break
-
-async def process_url(doc_id, url):
-    content = parse_web(url)
-    if content:
-        vector_store.add_documents(content, doc_id, url)
-        # Update registry status
+                    return
+        else:
+            raise Exception("Could not extract content from URL")
+    except Exception as e:
+        logger.error(f"URL Scrape Error: {e}")
         for doc in document_registry:
             if doc["id"] == doc_id:
-                doc["status"] = "ready"
+                doc["status"] = "error"
                 save_registry(document_registry)
                 break
 
