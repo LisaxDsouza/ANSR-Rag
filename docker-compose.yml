@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  web:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend/uploads:/app/backend/uploads
+      - ./backend/vector_storage.json:/app/backend/vector_storage.json
+    env_file:
+      - .env
+    restart: always
+
+# Note: In a production scale-out, we would add 'chroma' and 'postgres' services here.
+# For this optimized prototype, the 'web' service handles the Lite Vector Engine.

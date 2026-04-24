@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+env/
+.env
+
+# Project specific
+backend/uploads/*
+!backend/uploads/.gitkeep
+backend/chroma_db/
+backend/vector_storage.json
+backend/registry.json
+test_files/
+
+# OS
+.DS_Store
+Thumbs.db
