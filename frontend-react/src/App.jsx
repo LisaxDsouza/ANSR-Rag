@@ -193,12 +193,20 @@ function App() {
       <main className="main-content">
         <header className="chat-header glass">
           <div className="flex items-center gap-4">
-            <div className="flex -space-x-2">
-              <div className="w-8 h-8 rounded-full border-2 border-slate-900 bg-blue-600 flex items-center justify-center text-[10px] font-bold">L3</div>
+            <div className="w-10 h-10 rounded-xl bg-blue-600/20 border border-blue-500/30 flex items-center justify-center">
+              <MessageSquare className="w-5 h-5 text-blue-500" />
             </div>
             <div>
-              <p className="text-sm font-semibold">Llama 3.3 Engine</p>
-              <p className="text-[10px] text-green-500 font-bold uppercase">System Active</p>
+              <p className="text-sm font-bold tracking-wide">LLAMA 3.3 SYSTEM</p>
+              <div className="flex items-center gap-1.5">
+                <div className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></div>
+                <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Neural Link Active</p>
+              </div>
+            </div>
+          </div>
+          <div className="flex items-center gap-4">
+            <div className="px-3 py-1.5 rounded-full bg-slate-800/50 border border-slate-700 text-[10px] font-bold text-slate-400">
+              {documents.filter(d => d.status === 'ready').length} RESOURCES CACHED
             </div>
           </div>
         </header>

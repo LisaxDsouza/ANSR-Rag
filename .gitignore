@@ -19,3 +19,5 @@ test_files/
 # OS
 .DS_Store
 Thumbs.db
+*.zip
+
