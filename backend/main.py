@@ -148,6 +148,31 @@ async def process_url(doc_id, url):
 async def list_documents():
     return [DocumentInfo(id=doc["id"], filename=doc["filename"], status=doc["status"], type=doc["type"]) for doc in document_registry]
 
+@app.delete("/documents/{doc_id}")
+async def delete_document(doc_id: str):
+    global document_registry
+    doc_to_delete = None
+    for doc in document_registry:
+        if doc["id"] == doc_id:
+            doc_to_delete = doc
+            break
+            
+    if not doc_to_delete:
+        raise HTTPException(status_code=404, detail="Document not found")
+        
+    # 1. Remove from registry
+    document_registry = [doc for doc in document_registry if doc["id"] != doc_id]
+    save_registry(document_registry)
+    
+    # 2. Remove file from disk (if it's a file)
+    if doc_to_delete["type"] == "file" and os.path.exists(doc_to_delete["path"]):
+        try:
+            os.remove(doc_to_delete["path"])
+        except Exception as e:
+            logger.error(f"Error deleting file: {e}")
+            
+    return {"message": "Document deleted successfully"}
+
 @app.post("/query")
 async def handle_query(request: QueryRequest):
     if not request.selected_doc_ids:

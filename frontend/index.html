@@ -14,7 +14,18 @@
         .scroll-hide::-webkit-scrollbar { display: none; }
         .citation-card { border-left: 3px solid #3b82f6; background: rgba(59, 130, 246, 0.1); }
         input:focus { outline: none; border-color: #3b82f6; }
+        
+        /* Markdown Styling */
+        .markdown-body h1 { font-size: 1.5rem; font-weight: 700; margin-bottom: 1rem; color: #3b82f6; }
+        .markdown-body h2 { font-size: 1.25rem; font-weight: 600; margin-bottom: 0.75rem; }
+        .markdown-body p { margin-bottom: 1rem; line-height: 1.6; }
+        .markdown-body ul { list-style-type: disc; margin-left: 1.5rem; margin-bottom: 1rem; }
+        .markdown-body table { width: 100%; border-collapse: collapse; margin-bottom: 1rem; background: rgba(255,255,255,0.05); border-radius: 8px; overflow: hidden; }
+        .markdown-body th, .markdown-body td { padding: 8px 12px; border: 1px solid rgba(255,255,255,0.1); text-align: left; font-size: 0.8rem; }
+        .markdown-body th { background: rgba(59, 130, 246, 0.2); font-weight: 600; }
+        .markdown-body code { background: rgba(255,255,255,0.1); padding: 2px 4px; border-radius: 4px; font-family: monospace; }
     </style>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
 <body class="flex h-screen overflow-hidden">
 
@@ -32,6 +43,11 @@
                     <button onclick="toggleAll(true)" class="text-[10px] text-blue-400 hover:text-blue-300">SELECT ALL</button>
                     <button onclick="toggleAll(false)" class="text-[10px] text-slate-500 hover:text-slate-400">CLEAR</button>
                 </div>
+            </div>
+
+            <!-- Search Filter -->
+            <div class="mb-4">
+                <input type="text" id="doc-search" placeholder="Search documents..." oninput="renderDocs()" class="w-full bg-slate-900/50 border border-slate-700 rounded-lg px-3 py-2 text-[11px] text-slate-400 focus:border-blue-500 transition-all">
             </div>
             
             <!-- Upload Area -->
@@ -112,20 +128,32 @@
 
         function renderDocs() {
             const container = document.getElementById('doc-list');
-            if (documents.length === 0) {
-                container.innerHTML = '<p class="text-center text-xs text-slate-600 mt-10">No documents uploaded</p>';
+            const searchTerm = document.getElementById('doc-search').value.toLowerCase();
+            
+            const filteredDocs = documents.filter(doc => doc.filename.toLowerCase().includes(searchTerm));
+            
+            if (filteredDocs.length === 0) {
+                container.innerHTML = '<p class="text-center text-xs text-slate-600 mt-10">No documents found</p>';
                 return;
             }
-            container.innerHTML = documents.map(doc => `
+            container.innerHTML = filteredDocs.map(doc => `
                 <div class="flex items-center gap-3 p-3 rounded-lg hover:bg-slate-800 group transition-all">
                     <input type="checkbox" id="${doc.id}" class="w-4 h-4 rounded border-slate-700 bg-slate-900 text-blue-600 focus:ring-0 cursor-pointer" ${doc.status === 'ready' ? 'checked' : 'disabled'}>
                     <div class="flex-1 min-w-0">
                         <p class="text-xs font-medium text-slate-300 truncate">${doc.filename}</p>
                         <p class="text-[10px] ${doc.status === 'ready' ? 'text-green-500' : 'text-yellow-500'} uppercase font-bold">${doc.status}</p>
                     </div>
-                    <div class="text-slate-600 text-[10px]">${doc.type.toUpperCase()}</div>
+                    <button onclick="deleteDoc('${doc.id}')" class="opacity-0 group-hover:opacity-100 p-1 text-slate-500 hover:text-red-400 transition-all">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+                    </button>
                 </div>
             `).join('');
+        }
+
+        async function deleteDoc(id) {
+            if (!confirm("Are you sure you want to delete this document?")) return;
+            await fetch(`${API_BASE}/documents/${id}`, { method: "DELETE" });
+            await fetchDocs();
         }
 
         async function uploadFiles(input) {
@@ -217,7 +245,8 @@
                 return;
             }
 
-            let html = `<p class="text-sm leading-relaxed">${data.answer}</p>`;
+            // Render Markdown
+            let html = `<div class="markdown-body text-sm text-slate-300">${marked.parse(data.answer)}</div>`;
             
             if (data.citation) {
                 html += `
