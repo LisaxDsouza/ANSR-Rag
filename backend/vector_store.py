@@ -3,6 +3,7 @@ import json
 import numpy as np
 import requests
 import time
+import faiss
 from dotenv import load_dotenv
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 
@@ -10,12 +11,21 @@ load_dotenv()
 
 class VectorStoreManager:
     def __init__(self):
-        self.storage_path = os.getenv("CHROMA_DB_PATH", "./backend/vector_storage.json")
-        # Ensure path is a JSON file for our lite version
-        if os.path.isdir(self.storage_path):
-            self.storage_path = os.path.join(self.storage_path, "vectors.json")
-            
-        self.data = self._load_storage()
+        self.storage_dir = os.getenv("CHROMA_DB_PATH", "./backend/vector_db")
+        os.makedirs(self.storage_dir, exist_ok=True)
+        
+        self.index_path = os.path.join(self.storage_dir, "faiss.index")
+        self.meta_path = os.path.join(self.storage_dir, "metadata.json")
+        
+        # FAISS Index Configuration (Flat L2 for exact search at this scale)
+        self.dimension = 384 # Dimension for BGE-Small
+        if os.path.exists(self.index_path):
+            self.index = faiss.read_index(self.index_path)
+            with open(self.meta_path, 'r') as f:
+                self.metadata_store = json.load(f)
+        else:
+            self.index = faiss.IndexFlatIP(self.dimension) # Inner Product for Cosine Similarity
+            self.metadata_store = []
         
         # Hugging Face Inference API Configuration
         self.hf_token = os.getenv("HUGGINGFACE_API_KEY", "")
@@ -30,34 +40,26 @@ class VectorStoreManager:
             separators=["\n\n", "\n", " ", ""]
         )
 
-    def _load_storage(self):
-        if os.path.exists(self.storage_path):
-            with open(self.storage_path, 'r') as f:
-                return json.load(f)
-        return {"ids": [], "embeddings": [], "documents": [], "metadatas": []}
-
-    def _save_storage(self):
-        os.makedirs(os.path.dirname(self.storage_path), exist_ok=True)
-        with open(self.storage_path, 'w') as f:
-            json.dump(self.data, f)
-
     def _get_embeddings(self, texts):
         """Calls Hugging Face Inference API for embeddings."""
         payload = {"inputs": texts, "options": {"wait_for_model": True}}
-        response = requests.post(self.api_url, headers=self.headers, json=payload)
-        
-        if response.status_code == 200:
-            return response.json()
-        else:
-            # Fallback for API errors (returns dummy vectors for testing if API fails)
-            print(f"HF API Error: {response.status_code}. Using dummy vectors.")
-            return [[0.0] * 384 for _ in texts]
+        try:
+            response = requests.post(self.api_url, headers=self.headers, json=payload, timeout=20)
+            if response.status_code == 200:
+                # Normalize for Cosine Similarity (Inner Product)
+                embeddings = np.array(response.json()).astype('float32')
+                faiss.normalize_L2(embeddings)
+                return embeddings
+            else:
+                raise Exception(f"HF API Error: {response.status_code}")
+        except Exception as e:
+            print(f"Embedding Error: {e}")
+            return np.zeros((len(texts), self.dimension)).astype('float32')
 
     def add_documents(self, parsed_content, doc_id, filename):
-        """Chunks parsed content and adds it to our Lite Vector Store."""
+        """Chunks parsed content and adds it to the FAISS index."""
         all_chunks = []
         all_metadatas = []
-        all_ids = []
         
         for item in parsed_content:
             text = item["text"]
@@ -65,68 +67,55 @@ class VectorStoreManager:
             chunks = self.splitter.split_text(text)
             
             for i, chunk in enumerate(chunks):
-                chunk_id = f"{doc_id}_{i}"
                 all_chunks.append(chunk)
                 meta = base_metadata.copy()
-                meta.update({"doc_id": doc_id, "filename": filename})
+                meta.update({"doc_id": doc_id, "filename": filename, "content": chunk})
                 all_metadatas.append(meta)
-                all_ids.append(chunk_id)
         
+        if not all_chunks:
+            return 0
+
         # Batch processing for embeddings
         batch_size = 32
-        embeddings = []
         for i in range(0, len(all_chunks), batch_size):
             batch = all_chunks[i:i + batch_size]
-            embeddings.extend(self._get_embeddings(batch))
+            embeddings = self._get_embeddings(batch)
+            self.index.add(embeddings)
+            self.metadata_store.extend(all_metadatas[i:i + batch_size])
         
-        # Update local storage
-        self.data["ids"].extend(all_ids)
-        self.data["embeddings"].extend(embeddings)
-        self.data["documents"].extend(all_chunks)
-        self.data["metadatas"].extend(all_metadatas)
-        
-        self._save_storage()
+        # Persist
+        faiss.write_index(self.index, self.index_path)
+        with open(self.meta_path, 'w') as f:
+            json.dump(self.metadata_store, f)
+            
         return len(all_chunks)
 
     def query(self, query_text, selected_doc_ids, n_results=5):
-        """Performs Cosine Similarity search with metadata filtering using Numpy."""
-        if not self.data["embeddings"]:
+        """Queries the FAISS index with metadata filtering."""
+        if self.index.ntotal == 0:
             return {"ids": [[]], "documents": [[]], "metadatas": [[]]}
 
         # 1. Get query embedding
-        query_embedding = np.array(self._get_embeddings([query_text])[0])
+        query_embedding = self._get_embeddings([query_text])
         
-        # 2. Filter indices by selected_doc_ids
-        indices = [i for i, meta in enumerate(self.data["metadatas"]) if meta["doc_id"] in selected_doc_ids]
+        # 2. Search (Top-K) - We search a bit more to handle filtering
+        D, I = self.index.search(query_embedding, min(self.index.ntotal, 100))
         
-        if not indices:
-            return {"ids": [[]], "documents": [[]], "metadatas": [[]]}
-
-        # 3. Calculate similarities for filtered items
-        filtered_embeddings = np.array([self.data["embeddings"][i] for i in indices])
-        
-        # Cosine Similarity = (A . B) / (||A|| * ||B||)
-        # Normalize vectors for easier calculation
-        norm_filtered = filtered_embeddings / np.linalg.norm(filtered_embeddings, axis=1, keepdims=True)
-        norm_query = query_embedding / np.linalg.norm(query_embedding)
-        
-        similarities = np.dot(norm_filtered, norm_query)
-        
-        # 4. Get Top-K
-        top_indices_local = np.argsort(similarities)[::-1][:n_results]
-        
-        final_ids = []
         final_docs = []
         final_metadatas = []
         
-        for idx in top_indices_local:
-            global_idx = indices[idx]
-            final_ids.append(self.data["ids"][global_idx])
-            final_docs.append(self.data["documents"][global_idx])
-            final_metadatas.append(self.data["metadatas"][global_idx])
+        # 3. Filter by selected_doc_ids
+        for idx in I[0]:
+            if idx == -1: continue
+            meta = self.metadata_store[idx]
+            if meta["doc_id"] in selected_doc_ids:
+                final_docs.append(meta["content"])
+                final_metadatas.append(meta)
+                if len(final_docs) >= n_results:
+                    break
             
         return {
-            "ids": [final_ids],
+            "ids": [[""] * len(final_docs)],
             "documents": [final_docs],
             "metadatas": [final_metadatas]
         }
